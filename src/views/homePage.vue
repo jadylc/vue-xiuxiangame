@@ -236,26 +236,16 @@
         <div class="tag inventory-box">
           <el-tabs v-model="inventoryActive" :stretch="true">
             <el-tab-pane label="装备" name="equipment">
-              <el-dropdown trigger="click" @command="equipmentDropdown" v-if="player.inventory?.length">
-                <span class="el-dropdown-link">
+              <!-- ponytail: 原 el-dropdown 在本项目里点击不弹菜单(作者在鸿蒙商店也手写 div 绕过),
+                   改成普通可点 span + ElMessageBox 选择排序字段,不依赖 el-dropdown 组件。 -->
+              <div class="el-dropdown" v-if="player.inventory?.length">
+                <span class="el-dropdown-link el-dropdown-selfdefine" @click="showEquipmentSort">
                   装备排序
                   <el-icon>
                     <arrow-down />
                   </el-icon>
                 </span>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item
-                      :command="item.type"
-                      v-for="(item, index) in dropdownType"
-                      :key="index"
-                      :disabled="equipmentDropdownActive == item.type"
-                    >
-                      根据{{ item.name }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              </div>
               <el-tabs v-model="equipmentActive">
                 <el-tab-pane :label="i.name" :name="i.type" v-for="(i, k) in backPackItem" :key="k">
                   <div class="inventory-content">
@@ -314,26 +304,15 @@
               </div>
             </el-tab-pane>
             <el-tab-pane label="灵宠" name="pet">
-              <el-dropdown trigger="click" @command="petDropdown" v-if="player.pets.length">
-                <span class="el-dropdown-link">
+              <!-- ponytail: 同装备排序,改用普通可点 span + 选择弹窗,不依赖 el-dropdown -->
+              <div class="el-dropdown" v-if="player.pets.length">
+                <span class="el-dropdown-link el-dropdown-selfdefine" @click="showPetSort">
                   灵宠排序
                   <el-icon>
                     <arrow-down />
                   </el-icon>
                 </span>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item
-                      :command="item.type"
-                      v-for="(item, index) in dropdownType"
-                      :key="index"
-                      :disabled="petDropdownActive == item.type"
-                    >
-                      根据{{ item.name }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              </div>
               <div class="inventory-content">
                 <template v-for="(item, index) in player.pets" :key="index">
                   <tag
@@ -1100,6 +1079,20 @@
       <el-input v-model="err" :rows="10" type="textarea" />
       <div class="dialog-footer">
         <el-button type="primary" class="inventory-button" @click="errBox = false">确定</el-button>
+      </div>
+    </el-dialog>
+    <!-- ponytail: 排序选择弹窗——替代原 el-dropdown(本项目里点击不弹)。装备/灵宠共用,
+         sortDialogType 区分当前给谁排序,点选项后调 applySortCommand 执行并关闭。 -->
+    <el-dialog v-model="sortDialogShow" :lock-scroll="false" title="选择排序方式" width="320px" center>
+      <div class="sort-options">
+        <el-button
+          v-for="(item, index) in dropdownType"
+          :key="index"
+          class="sort-option-button"
+          @click="applySortCommand(item.type)"
+        >
+          根据{{ item.name }}
+        </el-button>
       </div>
     </el-dialog>
   </div>
@@ -2486,6 +2479,25 @@
     player.value.pets = player.value.pets.slice().sort(sortComparator(command))
   }
 
+  // ponytail: 排序选择弹窗状态。el-dropdown 在本项目点击不弹,改用 el-dialog(项目里 el-dialog 正常)。
+  //           sortDialogType 区分当前是给装备('equipment')还是灵宠('pet')排序。
+  const sortDialogShow = ref(false)
+  const sortDialogType = ref('equipment')
+  const showEquipmentSort = () => {
+    sortDialogType.value = 'equipment'
+    sortDialogShow.value = true
+  }
+  const showPetSort = () => {
+    sortDialogType.value = 'pet'
+    sortDialogShow.value = true
+  }
+  // 选中某个排序字段:按类型分发到装备/灵宠排序,关闭弹窗
+  const applySort = command => {
+    if (sortDialogType.value === 'equipment') equipmentDropdown(command)
+    else petDropdown(command)
+    sortDialogShow.value = false
+  }
+
   // 属性加点
   const attributePoints = type => {
     const typeNames = {
@@ -2733,6 +2745,18 @@
     min-height: 40px;
     line-height: 38px;
     height: auto;
+  }
+
+  /* ponytail: 排序选择弹窗——按钮网格排列,替代原 el-dropdown 下拉 */
+  .sort-options {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .sort-option-button {
+    margin: 0 !important;
+    width: 100%;
   }
 
   .inventory-content {
