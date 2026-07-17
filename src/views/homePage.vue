@@ -960,6 +960,7 @@
         </el-upload>
         <el-button type="warning" class="dialog-footer-button" @click="deleteScriptData">删除脚本</el-button>
         <el-divider>其他相关</el-divider>
+        <el-button type="warning" class="dialog-footer-button" @click="openPropEditor">道具修改器</el-button>
         <el-button class="dialog-footer-button" @click="sellingEquipmentBox">批量处理</el-button>
         <el-button type="primary" class="dialog-footer-button" @click="copyContent('qq')">官方群聊</el-button>
         <el-button type="success" class="dialog-footer-button" @click="copyContent('url')">开源地址</el-button>
@@ -1093,6 +1094,20 @@
         >
           根据{{ item.name }}
         </el-button>
+      </div>
+    </el-dialog>
+    <!-- ponytail: 道具数量修改器(自用调试)。列出 player.props 的 7 种货币,可直接改数量。
+         输入走 el-input-number,限定非负整数,避免改出 NaN/负数导致游戏逻辑出错。 -->
+    <el-dialog v-model="propEditorShow" :lock-scroll="false" title="道具修改器" width="360px" center>
+      <div class="prop-editor">
+        <div class="prop-editor-item" v-for="(item, index) in propEditorList" :key="index">
+          <span class="prop-editor-label">{{ propItemNames[item.key].name }}</span>
+          <el-input-number v-model="item.num" :min="0" :max="999999999" :step="1" step-strictly />
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <el-button class="dialog-footer-button" @click="propEditorShow = false">取消</el-button>
+        <el-button type="primary" class="dialog-footer-button" @click="applyPropEditor">保存修改</el-button>
       </div>
     </el-dialog>
   </div>
@@ -2498,6 +2513,27 @@
     sortDialogShow.value = false
   }
 
+  // ponytail: 道具数量修改器(自用调试)。打开时把 player.props 拷进临时列表编辑,
+  //           点保存才写回 —— 避免边输入边改真实数据触发一堆存档/上云。
+  const propEditorShow = ref(false)
+  const propEditorList = ref([])
+  const showPropEditor = () => {
+    // 从当前 props 快照生成可编辑列表(只列 propItemNames 里已知的道具)
+    propEditorList.value = Object.keys(player.value.props)
+      .filter(key => propItemNames[key])
+      .map(key => ({ key, name: propItemNames[key].name, num: player.value.props[key] }))
+    propEditorShow.value = true
+  }
+  const applyPropEditor = () => {
+    // ponytail: 逐项校验——非负整数才写回,挡住 NaN/负数/空值搞坏存档(项目里有 NaN 就 reset 的保护)。
+    for (const item of propEditorList.value) {
+      const n = Math.floor(Number(item.num))
+      if (Number.isFinite(n) && n >= 0) player.value.props[item.key] = n
+    }
+    propEditorShow.value = false
+    gameNotifys({ title: '提示', message: '道具数量已修改' })
+  }
+
   // 属性加点
   const attributePoints = type => {
     const typeNames = {
@@ -2757,6 +2793,22 @@
   .sort-option-button {
     margin: 0 !important;
     width: 100%;
+  }
+
+  .prop-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .prop-editor-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .prop-editor-label {
+    font-size: 14px;
   }
 
   .inventory-content {
