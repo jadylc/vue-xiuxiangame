@@ -238,12 +238,16 @@
             <el-tab-pane label="装备" name="equipment">
               <!-- ponytail: 原 el-dropdown 在本项目里点击不弹菜单(作者在鸿蒙商店也手写 div 绕过),
                    改成普通可点 span + ElMessageBox 选择排序字段,不依赖 el-dropdown 组件。 -->
-              <div class="el-dropdown" v-if="player.inventory?.length">
+              <!-- ponytail: 装备排序 + 批量处理入口并排放在装备背包顶部,不用再进设置里找,路径短。 -->
+              <div class="equip-toolbar" v-if="player.inventory?.length">
                 <span class="el-dropdown-link el-dropdown-selfdefine" @click="showEquipmentSort">
                   装备排序
                   <el-icon>
                     <arrow-down />
                   </el-icon>
+                </span>
+                <span class="el-dropdown-link el-dropdown-selfdefine" @click="sellingEquipmentBox">
+                  批量处理
                 </span>
               </div>
               <el-tabs v-model="equipmentActive">
@@ -1100,9 +1104,22 @@
          输入走 el-input-number,限定非负整数,避免改出 NaN/负数导致游戏逻辑出错。 -->
     <el-dialog v-model="propEditorShow" :lock-scroll="false" title="道具修改器" width="360px" center>
       <div class="prop-editor">
-        <div class="prop-editor-item" v-for="(item, index) in propEditorList" :key="index">
+        <el-divider>道具数量</el-divider>
+        <div class="prop-editor-item" v-for="(item, index) in propEditorList" :key="'p' + index">
           <span class="prop-editor-label">{{ propItemNames[item.key].name }}</span>
           <el-input-number v-model="item.num" :min="0" :max="999999999" :step="1" step-strictly />
+        </div>
+        <el-divider>角色属性</el-divider>
+        <div class="prop-editor-item" v-for="(item, index) in attrEditorList" :key="'a' + index">
+          <span class="prop-editor-label">{{ item.name }}</span>
+          <el-input-number
+            v-model="item.num"
+            :min="0"
+            :max="999999999"
+            :step="item.type === 'float' ? 0.01 : 1"
+            :step-strictly="item.type !== 'float'"
+            :precision="item.type === 'float' ? 4 : 0"
+          />
         </div>
       </div>
       <div class="dialog-footer">
@@ -2552,21 +2569,44 @@
   //           点保存才写回 —— 避免边输入边改真实数据触发一堆存档/上云。
   const propEditorShow = ref(false)
   const propEditorList = ref([])
+  // ponytail: 属性修改列表。int=整数字段,float=小数字段(暴击/闪避率是 0~1 小数,不能限整数)。
+  //           attack/health/defense 等直接改 player 上的字段;maxHealth 改后 health 跟着给满。
+  const attrEditorList = ref([])
+  const ATTR_FIELDS = [
+    { key: 'attack', name: '攻击', type: 'int' },
+    { key: 'maxHealth', name: '气血', type: 'int' },
+    { key: 'defense', name: '防御', type: 'int' },
+    { key: 'critical', name: '暴击率', type: 'float' },
+    { key: 'dodge', name: '闪避率', type: 'float' },
+    { key: 'level', name: '境界', type: 'int' },
+    { key: 'points', name: '可用点数', type: 'int' }
+  ]
   const showPropEditor = () => {
     // 从当前 props 快照生成可编辑列表(只列 propItemNames 里已知的道具)
     propEditorList.value = Object.keys(player.value.props)
       .filter(key => propItemNames[key])
       .map(key => ({ key, name: propItemNames[key].name, num: player.value.props[key] }))
+    // 属性快照
+    attrEditorList.value = ATTR_FIELDS.map(f => ({ ...f, num: player.value[f.key] }))
     propEditorShow.value = true
   }
   const applyPropEditor = () => {
-    // ponytail: 逐项校验——非负整数才写回,挡住 NaN/负数/空值搞坏存档(项目里有 NaN 就 reset 的保护)。
+    // ponytail: 逐项校验——非负数才写回,挡住 NaN/负数/空值搞坏存档(项目里有 NaN 就 reset 的保护)。
     for (const item of propEditorList.value) {
       const n = Math.floor(Number(item.num))
       if (Number.isFinite(n) && n >= 0) player.value.props[item.key] = n
     }
+    // 属性:整数字段取整,小数字段(暴击/闪避)保留小数,都要求非负且有限
+    for (const item of attrEditorList.value) {
+      let n = Number(item.num)
+      if (!Number.isFinite(n) || n < 0) continue
+      if (item.type === 'int') n = Math.floor(n)
+      player.value[item.key] = n
+    }
+    // maxHealth 改了就把当前气血给满,避免 health > maxHealth 或残留旧值
+    player.value.health = player.value.maxHealth
     propEditorShow.value = false
-    gameNotifys({ title: '提示', message: '道具数量已修改' })
+    gameNotifys({ title: '提示', message: '道具/属性已修改' })
   }
 
   // 属性加点
