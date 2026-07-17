@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   id         TEXT PRIMARY KEY,
   salt       TEXT NOT NULL,
   hash       TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  is_admin   INTEGER NOT NULL DEFAULT 0   -- 0 普通用户,1 管理员(手动 SQL 置 1);仅管理员显示修改器入口
 );
 
 CREATE TABLE IF NOT EXISTS saves (

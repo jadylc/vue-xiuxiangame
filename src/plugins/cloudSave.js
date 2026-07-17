@@ -22,6 +22,9 @@ const WORKER_URL = 'https://xx.ygmm.de'
 const CRED_KEY = 'cloudCred'
 // ponytail: 本地存档内容版本号。本地每次存档更新为当前时间戳;上传作为 rev,拉回时设为云端 rev。
 const LOCAL_REV_KEY = 'cloudLocalRev'
+// ponytail: 是否管理员。登录时服务端返回,存本地供 UI 判断是否显示管理功能(道具修改器)。
+//           仅控制入口显隐,不是安全边界——真正的权限校验需在服务端(见 accounts.is_admin)。
+const ADMIN_KEY = 'cloudIsAdmin'
 
 // ponytail: 上传节流间隔。30 秒——省额度,最多丢 30 秒进度(离开时 flush 补传兜底)。
 const THROTTLE_MS = 30000
@@ -51,6 +54,8 @@ export function clearCred() {
   localStorage.removeItem(CRED_KEY)
   // ponytail: 登出连带清掉本地版本号,避免下次登录别的账户时误判版本新旧。
   localStorage.removeItem(LOCAL_REV_KEY)
+  // 清掉管理员标记,登出后不再显示管理功能
+  localStorage.removeItem(ADMIN_KEY)
   // 清掉待传状态,避免登出后还把上个账户的存档传出去
   pendingData = null
   if (trailingTimer) {
@@ -95,8 +100,17 @@ export async function register(id, password) {
 //           交给调用方(见 homePage 的 doCloudLogin)按"拉回/上传"场景显式设置。
 export async function login(id, password) {
   const res = await post('/login', { id, password })
-  if (res.ok) setCred(id, password)
+  if (res.ok) {
+    setCred(id, password)
+    // ponytail: 存管理员标记,供 UI 判断是否显示道具修改器等管理功能
+    localStorage.setItem(ADMIN_KEY, res.isAdmin ? '1' : '')
+  }
   return res
+}
+
+// ponytail: 是否管理员。仅用于 UI 入口显隐,不是安全边界。
+export function isAdmin() {
+  return localStorage.getItem(ADMIN_KEY) === '1'
 }
 
 // 本地存档时调用(pinia serialize 里)。只更新本地版本 + 记住最新 data,按节流决定何时真正上传。

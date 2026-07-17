@@ -142,7 +142,9 @@ async function handleLogin(request, env) {
     ok: true,
     data: save?.data ?? null,
     rev: save?.rev ?? 0,
-    updatedAt: save?.updated_at ?? 0
+    updatedAt: save?.updated_at ?? 0,
+    // ponytail: 是否管理员——前端据此决定是否显示道具修改器入口(轻量控制,非服务端强鉴权)。
+    isAdmin: auth.is_admin === 1
   })
 }
 
