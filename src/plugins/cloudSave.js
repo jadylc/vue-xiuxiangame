@@ -1,12 +1,17 @@
-// ponytail: 云存档客户端封装 —— 所有 KV 调用集中于此,避免 fetch 逻辑散落到组件。
+// ponytail: 云存档客户端封装 —— 所有云端调用集中于此,避免 fetch 逻辑散落到组件。
 // 账户模式:用户名 + 密码。凭证存本地,自动存档时带上;新设备登录后拉回存档。
 //
 // 防回档核心模型(重要):
-//   本地维护一个"存档内容版本" localRev —— 本地每次存档就立即 +1(不依赖上传成功)。
+//   本地维护一个"存档内容版本" localRev —— 本地每次存档就立即前进(用时间戳,不依赖上传)。
 //   上传时把 localRev 作为 rev 带给云端;云端拒绝旧 rev 覆盖新 rev。
 //   多设备同步判断:只有 云端rev > 本地localRev 才拉回(说明另一台设备存了更新的进度)。
 //   关键:localRev 反映"本地存档内容"的版本,本地只要在动它就在涨,
-//        因此本地领先云端时绝不会被云端旧档误覆盖 —— 这是之前回档 bug 的根治。
+//        因此本地领先云端时绝不会被云端旧档误覆盖 —— 这是回档 bug 的根治。
+//
+// 上传节流(重要):游戏挂机/战斗每秒触发多次存档,若每次都上传会打爆云端写额度。
+//   所以 cloudSave 只更新 localRev + 记住最新 data,真正的网络上传按 THROTTLE_MS 节流,
+//   最多每 30 秒传一次;离开页面(切后台/关闭)时用 flushSave 立即补传最新,保证不丢进度。
+//   本地 localStorage 存档始终实时(由 pinia persist 负责),节流只影响"上传到云端"的频率。
 //
 // 设计:localStorage-first,登录后云端才生效;所有云调用异常静默吞,绝不阻断游戏。
 
@@ -15,8 +20,16 @@ const WORKER_URL = 'https://xx.ygmm.de'
 
 // ponytail: 本地凭证 key。凭证和存档('vuex')分开存,换设备时凭证在,存档可重新拉。
 const CRED_KEY = 'cloudCred'
-// ponytail: 本地存档内容版本号。本地每次存档 +1;上传作为 rev,拉回时设为云端 rev。
+// ponytail: 本地存档内容版本号。本地每次存档更新为当前时间戳;上传作为 rev,拉回时设为云端 rev。
 const LOCAL_REV_KEY = 'cloudLocalRev'
+
+// ponytail: 上传节流间隔。30 秒——省额度,最多丢 30 秒进度(离开时 flush 补传兜底)。
+const THROTTLE_MS = 30000
+
+// ---------- 节流状态(模块级) ----------
+let pendingData = null // 待上传的最新存档串;null 表示没有待传
+let lastUploadAt = 0 // 上次真正发起上传的时刻
+let trailingTimer = null // trailing 定时器句柄
 
 // ponytail: 读本地凭证 { id, password }。未登录返回 null。
 export function getCred() {
@@ -38,6 +51,12 @@ export function clearCred() {
   localStorage.removeItem(CRED_KEY)
   // ponytail: 登出连带清掉本地版本号,避免下次登录别的账户时误判版本新旧。
   localStorage.removeItem(LOCAL_REV_KEY)
+  // 清掉待传状态,避免登出后还把上个账户的存档传出去
+  pendingData = null
+  if (trailingTimer) {
+    clearTimeout(trailingTimer)
+    trailingTimer = null
+  }
 }
 
 export function isLoggedIn() {
@@ -80,22 +99,93 @@ export async function login(id, password) {
   return res
 }
 
-// 上送存档到云端。data 即 localStorage['vuex'](已是加密串)。
-// ponytail: 每次调用把本地版本 +1 作为 rev 上传 —— 本地存档内容的版本立即前进,
-//           不依赖上传成功。上传成功后本地 rev 已是最新,云端也是最新,一致。
-//           即使这次网络失败,本地 rev 已 +1,下次进入时云端 rev 不会 > 本地,不会误拉回。
-export async function cloudSave(data) {
+// 本地存档时调用(pinia serialize 里)。只更新本地版本 + 记住最新 data,按节流决定何时真正上传。
+// ponytail: 高频调用安全——每秒调多次也只是刷新 pendingData/localRev,网络上传最多 30 秒一次。
+export function cloudSave(data) {
+  if (!data) return
+  const cred = getCred()
+  if (!cred) return // 未登录不上云
+  // 本地内容版本立即前进(时间戳,单调递增)——不依赖上传成功,本地永远领先云端旧档。
+  setLocalRev(Date.now())
+  pendingData = data
+  scheduleUpload()
+}
+
+// ponytail: 节流调度。距上次上传够久就立即传;否则挂一个 trailing 定时器,到点用最新 data 传。
+//           trailing 保证"最后一次存档"最终会上传,不会因为一直在节流窗口内而永久丢失。
+function scheduleUpload() {
+  const elapsed = Date.now() - lastUploadAt
+  if (elapsed >= THROTTLE_MS) {
+    doUpload()
+  } else if (!trailingTimer) {
+    trailingTimer = setTimeout(() => {
+      trailingTimer = null
+      doUpload()
+    }, THROTTLE_MS - elapsed)
+  }
+}
+
+// ponytail: 真正的网络上传。取当前 pendingData,带上本地 rev。stale 时把本地 rev 对齐云端。
+async function doUpload() {
+  if (!pendingData) return
+  const cred = getCred()
+  if (!cred) return
+  const data = pendingData
+  pendingData = null
+  lastUploadAt = Date.now()
+  const rev = getLocalRev()
+  const res = await post('/save', { id: cred.id, password: cred.password, data, rev })
+  // 云端返回 stale 表示我这个 rev 比云端旧(多设备并发),把本地 rev 对齐云端,下次 check 会拉回。
+  if (res && res.ok && res.stale && res.rev) setLocalRev(res.rev)
+}
+
+// 立即上传指定存档,不走节流(用于登录后首次同步、导出存档等需要即时落云的场景)。
+// ponytail: 返回 Promise,调用方可 await 确认结果。会同步更新 localRev + 清掉待传状态,
+//           避免刚立即传完又被节流的 trailing 定时器重复传一次旧数据。
+export async function cloudSaveNow(data) {
   if (!data) return null
   const cred = getCred()
-  if (!cred) return null // 未登录不上云
-  // 本地版本前进一格,作为这次上传的 rev
-  const rev = getLocalRev() + 1
-  setLocalRev(rev)
+  if (!cred) return null
+  // 立即传也让本地版本前进,与云端保持一致
+  setLocalRev(Date.now())
+  // 取消挂起的节流上传,避免重复
+  pendingData = null
+  if (trailingTimer) {
+    clearTimeout(trailingTimer)
+    trailingTimer = null
+  }
+  lastUploadAt = Date.now()
+  const rev = getLocalRev()
   const res = await post('/save', { id: cred.id, password: cred.password, data, rev })
-  // ponytail: 云端返回 stale 表示我这个 rev 比云端旧(理论上不该发生,除非多设备并发)。
-  //           这种情况把本地 rev 对齐到云端,下次 check 会拉回云端的新版本。
-  if (res.ok && res.stale && res.rev) setLocalRev(res.rev)
-  return res.ok ? true : null
+  if (res && res.ok && res.stale && res.rev) setLocalRev(res.rev)
+  return res && res.ok ? true : null
+}
+
+// 立即把待传存档上送云端(离开页面时调用)。用 fetch keepalive 保证请求在页面卸载后仍发出。
+// ponytail: 移动端 beforeunload 不可靠,主要靠 visibilitychange→hidden 触发这里。
+//           keepalive 让请求脱离页面生命周期继续发送,不 await(离开时也等不到响应)。
+export function flushSave() {
+  if (trailingTimer) {
+    clearTimeout(trailingTimer)
+    trailingTimer = null
+  }
+  if (!pendingData) return
+  const cred = getCred()
+  if (!cred) return
+  const data = pendingData
+  pendingData = null
+  lastUploadAt = Date.now()
+  const rev = getLocalRev()
+  try {
+    fetch(`${WORKER_URL}/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: cred.id, password: cred.password, data, rev }),
+      keepalive: true // 关键:页面卸载后请求仍继续发送
+    }).catch(() => {})
+  } catch {
+    // 静默吞,离开页面时不阻塞
+  }
 }
 
 // 启动恢复:已登录 + 本地存档为空(换设备/清缓存)时,从云端拉回存档写入本地。
@@ -134,14 +224,23 @@ export async function checkAndPull() {
   return false
 }
 
-// 启动多设备自动同步:页面回到前台时检查云端是否有其他设备的新进度。
-// ponytail: 不做定时轮询——只在切回前台时查,避免游戏中途被拉取覆盖 + 省请求。
+// 启动多设备自动同步:页面切后台时补传本地进度,回到前台时检查其他设备的新进度。
+// ponytail: hidden→flush 保证离开前云端拿到最新;visible→checkAndPull 拉回其他设备的更新。
+//           不做定时轮询,避免游戏中途被拉取覆盖 + 省请求。
 //           onPulled 在拉到新存档时回调(调用方负责提示 + 刷新)。
 export function startAutoSync(onPulled) {
   if (typeof document === 'undefined') return
   document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState !== 'visible') return
-    const pulled = await checkAndPull()
-    if (pulled && typeof onPulled === 'function') onPulled()
+    if (document.visibilityState === 'hidden') {
+      // 切后台/关闭前,立即补传最新进度
+      flushSave()
+      return
+    }
+    if (document.visibilityState === 'visible') {
+      const pulled = await checkAndPull()
+      if (pulled && typeof onPulled === 'function') onPulled()
+    }
   })
+  // ponytail: 桌面端关闭标签页时也补传一次(移动端此事件不可靠,靠上面的 hidden 兜底)。
+  window.addEventListener('beforeunload', () => flushSave())
 }

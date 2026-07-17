@@ -1122,7 +1122,7 @@
   import equipTooltip from '@/components/equipTooltip.vue'
   import { ElMessageBox } from 'element-plus'
   import { useMainStore } from '@/plugins/store'
-  import { cloudSave, login, register, getCred, clearCred, isLoggedIn, setLocalRev } from '@/plugins/cloudSave'
+  import { cloudSaveNow, login, register, getCred, clearCred, isLoggedIn, setLocalRev } from '@/plugins/cloudSave'
   import {
     maxLv,
     dropdownType,
@@ -1614,7 +1614,7 @@
     const name = `我的文字修仙全靠刷-${year}${month}${day}${hours}${minutes}${seconds}-${ver.value}.json`
     saveAs(blob, name)
     // ponytail: 已登录则顺手同步一次云端,保证导出时刻云端也是最新
-    if (isLoggedIn()) await cloudSave(localStorage.getItem('vuex'))
+    if (isLoggedIn()) await cloudSaveNow(localStorage.getItem('vuex'))
   }
 
   // ponytail: 云账户弹窗 —— 已登录显示账户 + 登出;未登录提供注册/登录。
@@ -1692,7 +1692,7 @@
       gameNotifys({ title: '登录成功', message: '已从云端恢复存档' })
       setTimeout(() => location.reload(1), 800)
     } else {
-      await cloudSave(localSave)
+      await cloudSaveNow(localSave)
       gameNotifys({ title: '登录成功', message: '存档已开始自动云同步' })
     }
   }

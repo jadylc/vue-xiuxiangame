@@ -1,24 +1,26 @@
 /**
- * 修仙游戏存档 Worker —— Cloudflare Workers + KV
+ * 修仙游戏存档 Worker —— Cloudflare Workers + D1
  *
  * 账户模式：用户名 + 密码（无邮箱/手机，纯匿名账户）
  *
  * 接口：
- *   POST /register { id, password }        → { ok } / { ok:false, error:"id_taken" }
- *   POST /login    { id, password }         → { ok, data } / { ok:false, error:... }
- *   POST /save     { id, password, data }   → { ok } / { ok:false, error:... }
- *   GET  /ping                              → { ok:true }   健康检查
+ *   POST /register { id, password }              → { ok } / { ok:false, error:"id_taken" }
+ *   POST /login    { id, password }              → { ok, data, rev, updatedAt } / { ok:false, error:... }
+ *   POST /check    { id, password }              → { ok, rev, updatedAt }
+ *   POST /save     { id, password, data, rev }   → { ok, rev } / { ok:false, error:... }
+ *   GET  /ping                                   → { ok:true }   健康检查
  *
- * 数据（KV key 规划）：
- *   auth:<id>  = JSON { salt, hash, createdAt }   密码 PBKDF2-SHA256 派生，挡爆破
- *   save:<id>  = 加密存档字符串（crypto.js 的 AES 产物），一个玩家完整存档
+ * 数据（D1 表，见 schema.sql）：
+ *   accounts(id, salt, hash, created_at)         密码 PBKDF2-SHA256 派生，挡爆破
+ *   saves(id, data, rev, updated_at)             data 为加密存档串，rev 为版本号(防回档)
+ *
+ * ponytail: 从 KV 迁到 D1 的原因——KV 免费额度每天 1000 写,挂机游戏每秒触发存档会瞬间打爆。
+ *           D1 每天 10 万写,配合前端 30s 节流上传,单玩家每分钟最多 2 次写,额度绰绰有余。
  *
  * 鉴权：
  *   1. Origin 白名单——只接受来自你自己 Pages/自定义域名的请求。
- *   2. 写入限速——每个来源 IP 每分钟最多 MAX_WRITES_PER_MIN 次写，超过 429。
+ *   2. 写入限速——每个来源 IP 每分钟最多 MAX_WRITES_PER_MIN 次写(内存态,配合前端节流足够)。
  *   3. 用户名 + 密码——存/取存档必须带正确凭证。
- *
- * ponytail: id 不限字符（可中文/符号），KV key 支持任意 UTF-8（≤512B），日常 id 远不到上限。
  */
 
 // ponytail: 允许的来源域名。末段匹配，pages.dev 子域原生支持；生产自定义域名记得加进来。
@@ -29,9 +31,9 @@ const ALLOWED_ORIGINS = [
   '127.0.0.1'
 ]
 
-// ponytail: 每来源 IP 每分钟最大写入次数。修仙单机游戏存档频率低，够用。
+// ponytail: 每来源 IP 每分钟最大写入次数。前端已 30s 节流,这里是防滥用的第二道闸。
 const MAX_WRITES_PER_MIN = 30
-// ponytail: 存档字符串安全上限。实测满存档 ~20KB；25MB 是 KV 上限，这里保守挡恶意大包。
+// ponytail: 存档字符串安全上限。实测满存档 ~20KB；这里保守挡恶意大包。
 const MAX_DATA_BYTES = 1 * 1024 * 1024 // 1 MB
 // ponytail: id / 密码长度约束（挡空值和超长恶意输入；不限字符集）。
 const MAX_ID_BYTES = 256
@@ -39,6 +41,10 @@ const MIN_PASSWORD_LEN = 1
 const MAX_PASSWORD_LEN = 128
 // ponytail: PBKDF2 迭代轮数。10 万轮在 Workers CPU 时限内可接受，且显著抬高爆破成本。
 const PBKDF2_ITERATIONS = 100000
+
+// ponytail: 限速内存态。per-isolate,冷启动会重置——但配合前端 30s 节流 + origin 白名单,
+//           作为防滥用足够,且不消耗 D1 写额度(这正是迁 D1 要省的东西)。
+const rateBuckets = new Map()
 
 export default {
   async fetch(request, env, ctx) {
@@ -85,7 +91,7 @@ export default {
 // ---------- /register ----------
 async function handleRegister(request, env) {
   const ip = getClientIp(request)
-  if (!(await allowWrite(env, ip))) {
+  if (!allowWrite(ip)) {
     return json({ ok: false, error: 'rate_limited' }, 429)
   }
 
@@ -99,18 +105,17 @@ async function handleRegister(request, env) {
   const pwErr = validatePassword(password)
   if (pwErr) return json({ ok: false, error: pwErr }, 400)
 
-  // ponytail: 占坑——auth:<id> 已存在即视为被占，拒绝重名注册。
-  const existing = await env.SAVES.get(`auth:${id}`)
-  if (existing !== null) {
+  // ponytail: 占坑——accounts 已有该 id 即视为被占，拒绝重名注册。
+  const existing = await env.DB.prepare('SELECT id FROM accounts WHERE id = ?').bind(id).first()
+  if (existing) {
     return json({ ok: false, error: 'id_taken' }, 409)
   }
 
   const salt = randomSaltHex()
   const hash = await derivePasswordHash(password, salt)
-  await env.SAVES.put(
-    `auth:${id}`,
-    JSON.stringify({ salt, hash, createdAt: Date.now() })
-  )
+  await env.DB.prepare('INSERT INTO accounts (id, salt, hash, created_at) VALUES (?, ?, ?, ?)')
+    .bind(id, salt, hash, Date.now())
+    .run()
 
   return json({ ok: true })
 }
@@ -132,15 +137,19 @@ async function handleLogin(request, env) {
 
   // ponytail: 登录成功返回该账户的存档（可能为 null，表示注册后还没存过档）。
   //           同时返回 updatedAt + rev，供前端判断云端版本新旧、做多设备同步。
-  const data = await env.SAVES.get(`save:${id}`)
-  const meta = await getSaveMeta(env, id)
-  return json({ ok: true, data: data ?? null, updatedAt: meta.updatedAt, rev: meta.rev })
+  const save = await env.DB.prepare('SELECT data, rev, updated_at FROM saves WHERE id = ?').bind(id).first()
+  return json({
+    ok: true,
+    data: save?.data ?? null,
+    rev: save?.rev ?? 0,
+    updatedAt: save?.updated_at ?? 0
+  })
 }
 
 // ---------- /save ----------
 async function handleSave(request, env) {
   const ip = getClientIp(request)
-  if (!(await allowWrite(env, ip))) {
+  if (!allowWrite(ip)) {
     return json({ ok: false, error: 'rate_limited' }, 429)
   }
 
@@ -162,21 +171,26 @@ async function handleSave(request, env) {
     return json({ ok: false, error: 'wrong_password' }, 401)
   }
 
-  // ponytail: rev = 客户端存档内容版本(本地存档时刻的时间戳)。多设备同步靠它判断新旧。
-  //           关键:rev 由客户端给,代表"存档内容的版本",不是服务端收到的时刻。
+  // ponytail: rev = 客户端存档内容版本。多设备同步靠它判断新旧。
   const rev = typeof body.rev === 'number' ? body.rev : Date.now()
 
   // ponytail: 拒绝旧 rev 覆盖新 rev——防 fire-and-forget 并发/乱序上传把旧存档盖到新存档上。
   //           这是防回档的服务端最后一道闸:即使请求乱序到达,云端也只保留最新版本。
-  const existing = await getSaveMeta(env, id)
-  if (existing.rev && rev < existing.rev) {
+  const existing = await env.DB.prepare('SELECT rev FROM saves WHERE id = ?').bind(id).first()
+  if (existing && existing.rev && rev < existing.rev) {
     return json({ ok: true, rev: existing.rev, stale: true })
   }
 
   const updatedAt = Date.now()
-  await env.SAVES.put(`save:${id}`, data)
-  await env.SAVES.put(`savemeta:${id}`, JSON.stringify({ updatedAt, rev }))
-  return json({ ok: true, updatedAt, rev })
+  // ponytail: UPSERT——首次存档 INSERT,之后 ON CONFLICT 更新。一条 SQL 搞定,一次写。
+  await env.DB.prepare(
+    `INSERT INTO saves (id, data, rev, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET data = excluded.data, rev = excluded.rev, updated_at = excluded.updated_at`
+  )
+    .bind(id, data, rev, updatedAt)
+    .run()
+
+  return json({ ok: true, rev, updatedAt })
 }
 
 // ---------- /check ----------
@@ -196,21 +210,15 @@ async function handleCheck(request, env) {
     return json({ ok: false, error: 'wrong_password' }, 401)
   }
 
-  const meta = await getSaveMeta(env, id)
-  return json({ ok: true, rev: meta.rev, updatedAt: meta.updatedAt })
+  const save = await env.DB.prepare('SELECT rev, updated_at FROM saves WHERE id = ?').bind(id).first()
+  return json({ ok: true, rev: save?.rev ?? 0, updatedAt: save?.updated_at ?? 0 })
 }
 
-// ponytail: 读存档 meta { rev, updatedAt }。无记录返回 {rev:0, updatedAt:0}
-//           （老账户在本次改动前存的档没有 meta）。
-async function getSaveMeta(env, id) {
-  const raw = await env.SAVES.get(`savemeta:${id}`)
-  if (raw === null) return { rev: 0, updatedAt: 0 }
-  try {
-    const m = JSON.parse(raw)
-    return { rev: m.rev || 0, updatedAt: m.updatedAt || 0 }
-  } catch {
-    return { rev: 0, updatedAt: 0 }
-  }
+// ---------- 账户读取 ----------
+
+async function getAuth(env, id) {
+  // ponytail: 返回 { salt, hash } 供密码校验;不存在返回 null。
+  return await env.DB.prepare('SELECT salt, hash FROM accounts WHERE id = ?').bind(id).first()
 }
 
 // ---------- 密码派生 / 校验 ----------
@@ -240,16 +248,6 @@ async function verifyPassword(password, auth) {
   return timingSafeEqual(hash, auth.hash)
 }
 
-async function getAuth(env, id) {
-  const raw = await env.SAVES.get(`auth:${id}`)
-  if (raw === null) return null
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
 // ponytail: 常量时间比较，避免按字符早退泄漏时序信息（两串等长的 hex）。
 function timingSafeEqual(a, b) {
   if (a.length !== b.length) return false
@@ -269,7 +267,7 @@ function normalizeId(raw) {
 
 function validateId(id) {
   if (!id) return 'missing_id'
-  // ponytail: 用字节长度约束（中文占 3 字节），挡超长恶意 key。
+  // ponytail: 用字节长度约束（中文占 3 字节），挡超长恶意 id。
   if (utf8ByteLength(id) > MAX_ID_BYTES) return 'id_too_long'
   return null
 }
@@ -298,17 +296,24 @@ function isAllowedOrigin(request) {
   )
 }
 
-// ponytail: 限速用 KV 计数器简单实现。KV 最终一致，极端并发下可能多放几笔，
-//           修仙存档场景无所谓，不引入 Durable Objects 增加 60s 硬下限。
-async function allowWrite(env, ip) {
-  const windowStart = Math.floor(Date.now() / 60000) // 每分钟一个窗口
-  const counterKey = `rl:${ip}:${windowStart}`
-  const raw = await env.SAVES.get(counterKey)
-  const count = raw ? parseInt(raw, 10) : 0
-  if (count >= MAX_WRITES_PER_MIN) return false
-  await env.SAVES.put(counterKey, String(count + 1), {
-    expirationTtl: 120 // ponytail: 120s TTL 自动清理过期窗口的计数器，无需手动 GC
-  })
+// ponytail: 内存态限速——per-isolate 的滑动窗口计数。冷启动重置,但配合前端 30s 节流
+//           + origin 白名单足够防滥用,且不消耗 D1 写额度。
+function allowWrite(ip) {
+  const now = Date.now()
+  const windowStart = Math.floor(now / 60000)
+  const bucket = rateBuckets.get(ip)
+  if (!bucket || bucket.window !== windowStart) {
+    rateBuckets.set(ip, { window: windowStart, count: 1 })
+    // ponytail: 顺手清理陈旧桶,避免内存无限增长(单 isolate 内很少量,足够)。
+    if (rateBuckets.size > 5000) {
+      for (const [k, v] of rateBuckets) {
+        if (v.window < windowStart) rateBuckets.delete(k)
+      }
+    }
+    return true
+  }
+  if (bucket.count >= MAX_WRITES_PER_MIN) return false
+  bucket.count++
   return true
 }
 

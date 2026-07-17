@@ -2,10 +2,11 @@ name = "xiuxian-save"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
 
-# 把 KV 绑定到 Worker。在 Cloudflare 控制台或用 wrangler 创建 namespace：
-#   wrangler kv namespace create XIUXIAN_SAVES
-# 把返回的 id 填到下面。预览环境再创建一个并填 preview_id（可选）。
-[[kv_namespaces]]
-binding = "SAVES"
-id = "bed50300b9564c07b742e4bdd932dbff"
-# preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+# 存档改用 D1（SQLite）。KV 写额度太低（1000 次/天），挂机每秒存档会写爆。
+# D1 写额度 10 万/天，配合前端 30s 节流上传，足够。
+# 建库：wrangler d1 create xiuxian-saves
+# 建表：wrangler d1 execute xiuxian-saves --remote --file=schema.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "xiuxian-saves"
+database_id = "b3012c0c-8ba2-4f7a-bf11-3c6631788c12"
