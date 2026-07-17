@@ -2463,15 +2463,27 @@
     }
   }
 
+  // ponytail: 通用排序比较器。id 现在是字符串(uniqueId "时间戳-序号-随机"),不能用减法,
+  //           否则 NaN 导致 sort 不动——这正是"按时间排序点不动"的根因。按 id 走字符串比较,
+  //           其它字段(境界/评分/属性)是数值,走 b-a 降序。
+  const sortComparator = command => (a, b) => {
+    const av = a[command]
+    const bv = b[command]
+    if (typeof av === 'string' || typeof bv === 'string') {
+      return String(bv).localeCompare(String(av))
+    }
+    return (bv || 0) - (av || 0)
+  }
+
   // 装备排序
   const equipmentDropdown = command => {
     equipmentDropdownActive.value = command
-    player.value.inventory = player.value.inventory.slice().sort((a, b) => b[command] - a[command])
+    player.value.inventory = player.value.inventory.slice().sort(sortComparator(command))
   }
   // 灵宠排序
   const petDropdown = command => {
     petDropdownActive.value = command
-    player.value.pets = player.value.pets.slice().sort((a, b) => b[command] - a[command])
+    player.value.pets = player.value.pets.slice().sort(sortComparator(command))
   }
 
   // 属性加点
