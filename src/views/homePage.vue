@@ -967,6 +967,7 @@
         >
           <el-button type="warning" class="dialog-footer-button">导入存档</el-button>
         </el-upload>
+        <el-button type="success" class="dialog-footer-button" @click="showCodeImport">粘贴存档码导入</el-button>
         <el-button type="danger" class="dialog-footer-button" @click="deleteData">删除存档</el-button>
         <el-divider>脚本相关</el-divider>
         <el-upload
@@ -1121,6 +1122,7 @@
   import equipTooltip from '@/components/equipTooltip.vue'
   import { ElMessageBox } from 'element-plus'
   import { useMainStore } from '@/plugins/store'
+  import { cloudSave, cloudLoad, getSaveCode, setSaveCode } from '@/plugins/cloudSave'
   import {
     maxLv,
     dropdownType,
@@ -1595,7 +1597,7 @@
   }
 
   // 导出存档
-  const exportData = () => {
+  const exportData = async () => {
     const today = new Date()
     const year = today.getFullYear()
     const month = String(today.getMonth() + 1).padStart(2, '0')
@@ -1608,6 +1610,38 @@
     })
     const name = `我的文字修仙全靠刷-${year}${month}${day}${hours}${minutes}${seconds}-${ver.value}.json`
     saveAs(blob, name)
+    // ponytail: 额外上云并显示存档码,供玩家换设备/找回使用
+    await cloudSave(localStorage.getItem('vuex'))
+    ElMessageBox.alert(
+      `存档已导出文件。\n云存档码(换设备/找回用,请妥善保存):\n${getSaveCode()}`,
+      '导出成功',
+      { center: true }
+    ).catch(() => {})
+  }
+
+  // ponytail: 粘贴存档码导入 —— 拉取云端存档写回本地
+  const showCodeImport = () => {
+    ElMessageBox.prompt('请输入云存档码', '存档码导入', {
+      center: true,
+      confirmButtonText: '导入',
+      cancelButtonText: '取消'
+    })
+      .then(async ({ value: code }) => {
+        const trimmed = code.trim()
+        if (!trimmed) {
+          gameNotifys({ title: '提示', message: '存档码不能为空' })
+          return
+        }
+        const data = await cloudLoad(trimmed)
+        if (!data) {
+          gameNotifys({ title: '提示', message: '存档码无效或网络错误' })
+          return
+        }
+        localStorage.setItem('vuex', data)
+        setSaveCode(trimmed)
+        location.reload(1)
+      })
+      .catch(() => {})
   }
 
   // 批量分解装备弹窗

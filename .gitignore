@@ -22,3 +22,7 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Cloudflare Wrangler 本地缓存与登录态,绝不入库
+worker/.wrangler
+worker/node_modules

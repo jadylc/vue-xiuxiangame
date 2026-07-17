@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import crypto from '@/plugins/crypto'
+import { cloudSave } from '@/plugins/cloudSave'
 
 export const useMainStore = defineStore('main', {
   state: () => ({
@@ -117,10 +118,13 @@ export const useMainStore = defineStore('main', {
     storage: localStorage,
     serializer: {
       serialize: state => {
-        return JSON.stringify({
+        const payload = JSON.stringify({
           boss: crypto.encryption(state.boss),
           player: crypto.encryption(state.player)
         })
+        // ponytail: 异步上云,fire-and-forget;不 await 不看结果,断网即跳过,不改变 serialize 返回值
+        cloudSave(payload)
+        return payload
       },
       deserialize: value => {
         const state = JSON.parse(value)

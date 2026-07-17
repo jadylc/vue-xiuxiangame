@@ -6,6 +6,7 @@ import router from '@/plugins/router'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 import ElementPlus from 'element-plus'
+import { tryRestore } from '@/plugins/cloudSave'
 
 const app = createApp(App)
 
@@ -19,4 +20,6 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 
 app.use(router)
 app.use(ElementPlus)
+// ponytail: mount 前异步尝试从云端恢复存档;本地有存档或无 saveCode 时为空操作
+await tryRestore()
 app.mount('#app')
