@@ -967,7 +967,7 @@
         >
           <el-button type="warning" class="dialog-footer-button">导入存档</el-button>
         </el-upload>
-        <el-button type="success" class="dialog-footer-button" @click="showCodeImport">粘贴存档码导入</el-button>
+        <el-button type="success" class="dialog-footer-button" @click="showCloudAccount">云存档登录 / 账户</el-button>
         <el-button type="danger" class="dialog-footer-button" @click="deleteData">删除存档</el-button>
         <el-divider>脚本相关</el-divider>
         <el-upload
@@ -1122,7 +1122,7 @@
   import equipTooltip from '@/components/equipTooltip.vue'
   import { ElMessageBox } from 'element-plus'
   import { useMainStore } from '@/plugins/store'
-  import { cloudSave, cloudLoad, getSaveCode, setSaveCode } from '@/plugins/cloudSave'
+  import { cloudSave, login, register, getCred, clearCred, isLoggedIn } from '@/plugins/cloudSave'
   import {
     maxLv,
     dropdownType,
@@ -1596,7 +1596,7 @@
     reader.readAsText(file)
   }
 
-  // 导出存档
+  // 导出存档(本地文件备份,与云存档并存)
   const exportData = async () => {
     const today = new Date()
     const year = today.getFullYear()
@@ -1610,38 +1610,97 @@
     })
     const name = `我的文字修仙全靠刷-${year}${month}${day}${hours}${minutes}${seconds}-${ver.value}.json`
     saveAs(blob, name)
-    // ponytail: 额外上云并显示存档码,供玩家换设备/找回使用
-    await cloudSave(localStorage.getItem('vuex'))
-    ElMessageBox.alert(
-      `存档已导出文件。\n云存档码(换设备/找回用,请妥善保存):\n${getSaveCode()}`,
-      '导出成功',
-      { center: true }
-    ).catch(() => {})
+    // ponytail: 已登录则顺手同步一次云端,保证导出时刻云端也是最新
+    if (isLoggedIn()) await cloudSave(localStorage.getItem('vuex'))
   }
 
-  // ponytail: 粘贴存档码导入 —— 拉取云端存档写回本地
-  const showCodeImport = () => {
-    ElMessageBox.prompt('请输入云存档码', '存档码导入', {
+  // ponytail: 云账户弹窗 —— 已登录显示账户 + 登出;未登录提供注册/登录。
+  //           登录成功若云端有存档且本地为空,拉回;本地有档则上传覆盖云端。
+  const showCloudAccount = () => {
+    const cred = getCred()
+    if (cred) {
+      ElMessageBox.confirm(`当前云账户:${cred.id}\n存档已自动同步。是否登出?`, '云存档账户', {
+        center: true,
+        confirmButtonText: '登出',
+        cancelButtonText: '关闭'
+      })
+        .then(() => {
+          clearCred()
+          gameNotifys({ title: '提示', message: '已登出云账户(本地存档保留)' })
+        })
+        .catch(() => {})
+      return
+    }
+    // 未登录:先输入账户名
+    ElMessageBox.prompt('请输入云账户名(用于跨设备同步存档)', '云存档登录', {
       center: true,
-      confirmButtonText: '导入',
+      confirmButtonText: '下一步',
       cancelButtonText: '取消'
     })
-      .then(async ({ value: code }) => {
-        const trimmed = code.trim()
-        if (!trimmed) {
-          gameNotifys({ title: '提示', message: '存档码不能为空' })
+      .then(({ value: idRaw }) => {
+        const id = (idRaw || '').trim()
+        if (!id) {
+          gameNotifys({ title: '提示', message: '账户名不能为空' })
           return
         }
-        const data = await cloudLoad(trimmed)
-        if (!data) {
-          gameNotifys({ title: '提示', message: '存档码无效或网络错误' })
-          return
-        }
-        localStorage.setItem('vuex', data)
-        setSaveCode(trimmed)
-        location.reload(1)
+        // 再输入密码
+        ElMessageBox.prompt(`账户「${id}」的密码`, '云存档登录', {
+          center: true,
+          inputType: 'password',
+          confirmButtonText: '登录 / 注册',
+          cancelButtonText: '取消'
+        })
+          .then(async ({ value: pwd }) => {
+            const password = (pwd || '').trim()
+            if (!password) {
+              gameNotifys({ title: '提示', message: '密码不能为空' })
+              return
+            }
+            await doCloudLogin(id, password)
+          })
+          .catch(() => {})
       })
       .catch(() => {})
+  }
+
+  // ponytail: 登录/注册合一 —— 先尝试登录;账户不存在则注册再登录。
+  const doCloudLogin = async (id, password) => {
+    let res = await login(id, password)
+    if (!res.ok && res.error === 'id_not_found') {
+      // 账户不存在 → 注册后再登录
+      const reg = await register(id, password)
+      if (!reg.ok) {
+        gameNotifys({ title: '登录失败', message: cloudErrText(reg.error) })
+        return
+      }
+      res = await login(id, password)
+    }
+    if (!res.ok) {
+      gameNotifys({ title: '登录失败', message: cloudErrText(res.error) })
+      return
+    }
+    // 登录成功:云端有档且本地无档 → 拉回;否则上传本地覆盖云端
+    const localSave = localStorage.getItem('vuex')
+    if (res.data && !localSave) {
+      localStorage.setItem('vuex', res.data)
+      gameNotifys({ title: '登录成功', message: '已从云端恢复存档' })
+      setTimeout(() => location.reload(1), 800)
+    } else {
+      await cloudSave(localSave)
+      gameNotifys({ title: '登录成功', message: '存档已开始自动云同步' })
+    }
+  }
+
+  // ponytail: 云端错误码转中文提示
+  const cloudErrText = err => {
+    const map = {
+      id_taken: '账户名已被占用',
+      id_not_found: '账户不存在',
+      wrong_password: '密码错误',
+      network_error: '网络错误,请稍后再试',
+      missing_fields: '账户名或密码为空'
+    }
+    return map[err] || '操作失败,请重试'
   }
 
   // 批量分解装备弹窗

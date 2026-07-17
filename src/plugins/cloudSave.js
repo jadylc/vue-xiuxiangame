@@ -1,64 +1,84 @@
 // ponytail: 云存档客户端封装 —— 所有 KV 调用集中于此,避免 fetch 逻辑散落到组件。
-// 设计:localStorage-first,KV 是"同步 + 防丢"补充层。所有云调用异常静默吞,绝不阻断游戏。
+// 账户模式:用户名 + 密码。凭证存本地,自动存档时带上;新设备登录后拉回存档。
+// 设计:localStorage-first,登录后云端才生效;所有云调用异常静默吞,绝不阻断游戏。
 
-// ponytail: Worker URL,部署后回填真实域名。用自定义域名,workers.dev 在国内 DNS 污染连不上。
+// ponytail: Worker URL,用自定义域名,workers.dev 在国内 DNS 污染连不上。
 const WORKER_URL = 'https://xx.ygmm.de'
 
-// ponytail: 存档码本地记忆 key。和存档本身('vuex')分开存,便于换设备时单独恢复。
-const SAVE_CODE_KEY = 'saveCode'
+// ponytail: 本地凭证 key。凭证和存档('vuex')分开存,换设备时凭证在,存档可重新拉。
+const CRED_KEY = 'cloudCred'
 
-export function getSaveCode() {
-  return localStorage.getItem(SAVE_CODE_KEY) || ''
-}
-
-export function setSaveCode(code) {
-  if (code) localStorage.setItem(SAVE_CODE_KEY, code)
-}
-
-// 上送存档到 KV。data 即 localStorage['vuex'] 的内容(已是加密串)。
-// code 缺省时服务端新建并返回;之后本地记住这个 code。
-// ponytail: fire-and-forget,返回 null 表示失败,调用方无需处理(顶多没同步上云)。
-export async function cloudSave(data) {
-  if (!data) return null
+// ponytail: 读本地凭证 { id, password }。未登录返回 null。
+export function getCred() {
   try {
-    const res = await fetch(`${WORKER_URL}/save`, {
+    const raw = localStorage.getItem(CRED_KEY)
+    if (!raw) return null
+    const cred = JSON.parse(raw)
+    return cred && cred.id && cred.password ? cred : null
+  } catch {
+    return null
+  }
+}
+
+export function setCred(id, password) {
+  localStorage.setItem(CRED_KEY, JSON.stringify({ id, password }))
+}
+
+export function clearCred() {
+  localStorage.removeItem(CRED_KEY)
+}
+
+export function isLoggedIn() {
+  return getCred() !== null
+}
+
+// ponytail: 统一 POST 封装,异常/非 2xx 都转成 { ok:false, error }。
+async function post(path, payload) {
+  try {
+    const res = await fetch(`${WORKER_URL}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: getSaveCode(), data })
+      body: JSON.stringify(payload)
     })
-    const json = await res.json()
-    if (json.ok) {
-      setSaveCode(json.code)
-      return json.code
-    }
-    return null
+    return await res.json()
   } catch {
-    // ponytail: 网络失败静默吞,不阻塞游戏;下次存档再补传
-    return null
+    return { ok: false, error: 'network_error' }
   }
 }
 
-// 按存档码从 KV 拉回存档字符串。
-export async function cloudLoad(code) {
-  try {
-    const res = await fetch(`${WORKER_URL}/load?code=${encodeURIComponent(code)}`)
-    const json = await res.json()
-    return json.ok ? json.data : null
-  } catch {
-    return null
-  }
+// 注册账户。成功后不自动登录,交给调用方决定(通常紧接一次 login/save)。
+export async function register(id, password) {
+  return await post('/register', { id, password })
 }
 
-// 启动恢复:本地有 saveCode 但本地存档丢了(换浏览器/清缓存),尝试从云端拉回。
-// ponytail: 仅在本地 vuex 为空时拉云端,避免用旧云档覆盖新本地档。
+// 登录。成功返回 { ok:true, data }(data 为该账户云端存档,可能 null)。
+// ponytail: 登录成功即把凭证写入本地,后续自动存档会带上。
+export async function login(id, password) {
+  const res = await post('/login', { id, password })
+  if (res.ok) setCred(id, password)
+  return res
+}
+
+// 上送存档到云端。data 即 localStorage['vuex'](已是加密串)。
+// ponytail: fire-and-forget 调用点不 await;未登录直接跳过(退化为本地 only)。
+export async function cloudSave(data) {
+  if (!data) return null
+  const cred = getCred()
+  if (!cred) return null // 未登录不上云
+  const res = await post('/save', { id: cred.id, password: cred.password, data })
+  return res.ok ? true : null
+}
+
+// 启动恢复:已登录 + 本地存档为空(换设备/清缓存)时,从云端拉回存档写入本地。
+// ponytail: 仅在本地 vuex 为空时拉,避免用旧云档覆盖新本地档。
 export async function tryRestore() {
-  const code = getSaveCode()
-  if (code && !localStorage.getItem('vuex')) {
-    const data = await cloudLoad(code)
-    if (data) {
-      localStorage.setItem('vuex', data)
-      return code
-    }
+  const cred = getCred()
+  if (!cred) return false
+  if (localStorage.getItem('vuex')) return false // 本地有档,优先本地
+  const res = await post('/login', { id: cred.id, password: cred.password })
+  if (res.ok && res.data) {
+    localStorage.setItem('vuex', res.data)
+    return true
   }
-  return null
+  return false
 }
