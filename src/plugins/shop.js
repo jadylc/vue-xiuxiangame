@@ -1,3 +1,4 @@
+import { uniqueId } from './game'
 const shop = {
   drawPrize(lv) {
     const types = [
@@ -29,7 +30,7 @@ const shop = {
       type,
       name: genre[type],
       data: data.flatMap(name => ({
-        id: Date.now(),
+        id: uniqueId(),
         name,
         type,
         lock: true,

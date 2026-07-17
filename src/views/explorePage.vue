@@ -74,7 +74,8 @@
     genre,
     levels,
     gameNotifys,
-    smoothScrollToBottom
+    smoothScrollToBottom,
+    uniqueId
   } from '@/plugins/game'
   import { ElMessageBox } from 'element-plus'
 
@@ -414,7 +415,7 @@
         const critical = parseFloat(getRandomFloatInRange(0.001, 0.01) * newProperties)
         // 添加到灵宠背包里
         player.value.pets.push({
-          id: Date.now(),
+          id: uniqueId(),
           lock: false,
           name: item.name,
           level: 1,

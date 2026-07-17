@@ -2,6 +2,12 @@ import { ElNotification } from 'element-plus'
 
 export const maxLv = 144
 
+// ponytail: 唯一 ID 生成器。原来各处用 Date.now() 生成装备/灵宠 id,同一毫秒连续生成
+//           (无尽塔扫荡、连续爆装)会撞 id。id 重复会让 :key 复用错误 DOM(排序点了没反应)、
+//           删除/强化误伤同 id 的另一件。这里用 时间戳 + 自增序号 + 随机后缀 保证全局唯一。
+let __uidSeq = 0
+export const uniqueId = () => `${Date.now()}-${++__uidSeq}-${Math.floor(Math.random() * 1e6)}`
+
 export const gameNotifys = data => {
   ElNotification.closeAll()
   ElNotification(data)

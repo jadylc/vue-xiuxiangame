@@ -131,10 +131,10 @@ async function handleLogin(request, env) {
   }
 
   // ponytail: 登录成功返回该账户的存档（可能为 null，表示注册后还没存过档）。
-  //           同时返回 updatedAt，供前端判断云端版本新旧、做多设备同步。
+  //           同时返回 updatedAt + rev，供前端判断云端版本新旧、做多设备同步。
   const data = await env.SAVES.get(`save:${id}`)
-  const updatedAt = await getSaveUpdatedAt(env, id)
-  return json({ ok: true, data: data ?? null, updatedAt })
+  const meta = await getSaveMeta(env, id)
+  return json({ ok: true, data: data ?? null, updatedAt: meta.updatedAt, rev: meta.rev })
 }
 
 // ---------- /save ----------
@@ -162,16 +162,26 @@ async function handleSave(request, env) {
     return json({ ok: false, error: 'wrong_password' }, 401)
   }
 
-  // ponytail: 存档 + 时间戳一起写。updatedAt 单独存 savemeta:<id>，供多设备同步判断版本。
+  // ponytail: rev = 客户端存档内容版本(本地存档时刻的时间戳)。多设备同步靠它判断新旧。
+  //           关键:rev 由客户端给,代表"存档内容的版本",不是服务端收到的时刻。
+  const rev = typeof body.rev === 'number' ? body.rev : Date.now()
+
+  // ponytail: 拒绝旧 rev 覆盖新 rev——防 fire-and-forget 并发/乱序上传把旧存档盖到新存档上。
+  //           这是防回档的服务端最后一道闸:即使请求乱序到达,云端也只保留最新版本。
+  const existing = await getSaveMeta(env, id)
+  if (existing.rev && rev < existing.rev) {
+    return json({ ok: true, rev: existing.rev, stale: true })
+  }
+
   const updatedAt = Date.now()
   await env.SAVES.put(`save:${id}`, data)
-  await env.SAVES.put(`savemeta:${id}`, JSON.stringify({ updatedAt }))
-  return json({ ok: true, updatedAt })
+  await env.SAVES.put(`savemeta:${id}`, JSON.stringify({ updatedAt, rev }))
+  return json({ ok: true, updatedAt, rev })
 }
 
 // ---------- /check ----------
-// ponytail: 轻量版本检查——只返回云端存档时间戳，不传整个存档，省流量。
-//           前端定时/切前台时调用，判断云端是否有比本地更新的进度。
+// ponytail: 轻量版本检查——只返回云端存档 rev + 时间戳，不传整个存档，省流量。
+//           前端切前台时调用，判断云端是否有比本地更新的进度。
 async function handleCheck(request, env) {
   const body = await readJson(request)
   if (!body) return json({ ok: false, error: 'bad_json' }, 400)
@@ -186,18 +196,20 @@ async function handleCheck(request, env) {
     return json({ ok: false, error: 'wrong_password' }, 401)
   }
 
-  const updatedAt = await getSaveUpdatedAt(env, id)
-  return json({ ok: true, updatedAt })
+  const meta = await getSaveMeta(env, id)
+  return json({ ok: true, rev: meta.rev, updatedAt: meta.updatedAt })
 }
 
-// ponytail: 读存档时间戳。无记录返回 0（老账户在本次改动前存的档没有 meta）。
-async function getSaveUpdatedAt(env, id) {
+// ponytail: 读存档 meta { rev, updatedAt }。无记录返回 {rev:0, updatedAt:0}
+//           （老账户在本次改动前存的档没有 meta）。
+async function getSaveMeta(env, id) {
   const raw = await env.SAVES.get(`savemeta:${id}`)
-  if (raw === null) return 0
+  if (raw === null) return { rev: 0, updatedAt: 0 }
   try {
-    return JSON.parse(raw).updatedAt || 0
+    const m = JSON.parse(raw)
+    return { rev: m.rev || 0, updatedAt: m.updatedAt || 0 }
   } catch {
-    return 0
+    return { rev: 0, updatedAt: 0 }
   }
 }
 

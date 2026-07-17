@@ -1122,7 +1122,7 @@
   import equipTooltip from '@/components/equipTooltip.vue'
   import { ElMessageBox } from 'element-plus'
   import { useMainStore } from '@/plugins/store'
-  import { cloudSave, login, register, getCred, clearCred, isLoggedIn } from '@/plugins/cloudSave'
+  import { cloudSave, login, register, getCred, clearCred, isLoggedIn, setLocalRev } from '@/plugins/cloudSave'
   import {
     maxLv,
     dropdownType,
@@ -1132,7 +1132,8 @@
     levels,
     gameNotifys,
     propItemNames,
-    dropdownTypeObject
+    dropdownTypeObject,
+    uniqueId
   } from '@/plugins/game'
 
   const store = useMainStore()
@@ -1687,6 +1688,7 @@
     const localSave = localStorage.getItem('vuex')
     if (res.data && !localSave) {
       localStorage.setItem('vuex', res.data)
+      setLocalRev(res.rev || Date.now()) // ponytail: 拉回云端档后同步本地版本号,避免 reload 后重复拉取
       gameNotifys({ title: '登录成功', message: '已从云端恢复存档' })
       setTimeout(() => location.reload(1), 800)
     } else {
@@ -2390,7 +2392,7 @@
     // 跳转背包相关页
     equipmentActive.value = type
     // 更新装备ID
-    equipment[type].id = Date.now()
+    equipment[type].id = uniqueId()
     // 添加装备到背包里
     inventory.push(equipment[type])
     // 清空身上当前类型的装备

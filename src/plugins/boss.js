@@ -1,3 +1,4 @@
+import { uniqueId } from './game'
 const boss = {
   drawPrize(lv) {
     const bossInfo = this.boss_Names()
@@ -63,7 +64,7 @@ const boss = {
         const defense = this.getRandomInt(500, 1000) * lv * 10
         const Criticalhitrate = this.getRandomFloatInRange(0.05, 0.1)
         return {
-          id: Date.now(), // 装备ID
+          id: uniqueId(), // 装备ID
           name: names[Math.floor(Math.random() * names.length)], //装备名字
           type: quality, // 装备类型
           level: lv, // 装备等级

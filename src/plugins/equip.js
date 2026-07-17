@@ -1,3 +1,4 @@
+import { uniqueId } from './game'
 const equips = {
   drawPrize(lv, type, names_a, names_b, names_c, names_d, names_e, names_f, isNewbie) {
     // 如果玩家等级为0 生成的装备等级最低为1, 如果玩家等级低于40级的话就随机生成当前等级和低于当前等级的装备
@@ -34,7 +35,7 @@ const equips = {
           : 0
         const critical = ['weapon', 'accessory', 'sutra'].includes(type) ? this.equip_Criticalhitrate(lv) : 0
         const baseEquip = {
-          id: Date.now(), // 装备ID
+          id: uniqueId(), // 装备ID
           name: names[Math.floor(Math.random() * names.length)], //装备名字
           type, // 装备类型
           lock: false,
