@@ -250,7 +250,7 @@
                 <el-tab-pane :label="i.name" :name="i.type" v-for="(i, k) in backPackItem" :key="k">
                   <div class="inventory-content">
                     <div v-if="player.inventory.length">
-                      <template v-for="item in player.inventory" :key="item.id">
+                      <template v-for="item in sortedInventory" :key="item.id">
                         <el-popover placement="bottom" :title="item.name" :width="300" trigger="hover">
                           <template #reference>
                             <span>
@@ -314,7 +314,7 @@
                 </span>
               </div>
               <div class="inventory-content">
-                <template v-for="(item, index) in player.pets" :key="index">
+                <template v-for="(item, index) in sortedPets" :key="index">
                   <tag
                     class="inventory-item"
                     :type="computePetsLevel(item.level)"
@@ -2487,16 +2487,21 @@
     return (bv || 0) - (av || 0)
   }
 
-  // 装备排序
-  const equipmentDropdown = command => {
-    equipmentDropdownActive.value = command
-    player.value.inventory = player.value.inventory.slice().sort(sortComparator(command))
-  }
-  // 灵宠排序
-  const petDropdown = command => {
-    petDropdownActive.value = command
-    player.value.pets = player.value.pets.slice().sort(sortComparator(command))
-  }
+  // ponytail: 排序做成"固定"——记住排序字段(存 localStorage,重进保留),渲染时用 computed 实时排。
+  //           这样即使战斗/探索不断爆新装备 push 进背包,列表也会自动按记住的字段归位,不用重选。
+  //           空字符串表示未设置排序,此时保持原始数组顺序。
+  const equipmentSortKey = ref(localStorage.getItem('equipmentSortKey') || '')
+  const petSortKey = ref(localStorage.getItem('petSortKey') || '')
+
+  // 排好序的装备/灵宠列表——模板用这两个渲染,而不是直接用 player.inventory/pets。
+  const sortedInventory = computed(() => {
+    if (!equipmentSortKey.value) return player.value.inventory
+    return player.value.inventory.slice().sort(sortComparator(equipmentSortKey.value))
+  })
+  const sortedPets = computed(() => {
+    if (!petSortKey.value) return player.value.pets
+    return player.value.pets.slice().sort(sortComparator(petSortKey.value))
+  })
 
   // ponytail: 排序选择弹窗状态。el-dropdown 在本项目点击不弹,改用 el-dialog(项目里 el-dialog 正常)。
   //           sortDialogType 区分当前是给装备('equipment')还是灵宠('pet')排序。
@@ -2510,10 +2515,17 @@
     sortDialogType.value = 'pet'
     sortDialogShow.value = true
   }
-  // 选中某个排序字段:按类型分发到装备/灵宠排序,关闭弹窗
+  // 选中某个排序字段:只记住字段(存本地),渲染由 computed 自动完成,关闭弹窗
   const applySortCommand = command => {
-    if (sortDialogType.value === 'equipment') equipmentDropdown(command)
-    else petDropdown(command)
+    if (sortDialogType.value === 'equipment') {
+      equipmentSortKey.value = command
+      equipmentDropdownActive.value = command
+      localStorage.setItem('equipmentSortKey', command)
+    } else {
+      petSortKey.value = command
+      petDropdownActive.value = command
+      localStorage.setItem('petSortKey', command)
+    }
     sortDialogShow.value = false
   }
 
