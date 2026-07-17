@@ -20,6 +20,8 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 
 app.use(router)
 app.use(ElementPlus)
-// ponytail: mount 前异步尝试从云端恢复存档;本地有存档或无 saveCode 时为空操作
-await tryRestore()
-app.mount('#app')
+// ponytail: 异步恢复云端存档后再 mount。用 IIFE 包裹避免顶层 await(esbuild prod target=es2020 不支持顶层 await)
+;(async () => {
+  await tryRestore()
+  app.mount('#app')
+})()
