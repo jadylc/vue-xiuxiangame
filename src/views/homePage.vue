@@ -2492,7 +2492,7 @@
     sortDialogShow.value = true
   }
   // 选中某个排序字段:按类型分发到装备/灵宠排序,关闭弹窗
-  const applySort = command => {
+  const applySortCommand = command => {
     if (sortDialogType.value === 'equipment') equipmentDropdown(command)
     else petDropdown(command)
     sortDialogShow.value = false
