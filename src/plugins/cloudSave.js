@@ -125,7 +125,26 @@ function scheduleUpload() {
   }
 }
 
-// ponytail: 真正的网络上传。取当前 pendingData,带上本地 rev。stale 时把本地 rev 对齐云端。
+// ponytail: 带恢复的上传核心。/save 遇到 id_not_found(账户在云端不存在)时,
+//           用本地凭证自动 register 再重试一次 —— 透明迁移 KV 时代的老账户到 D1,用户无感。
+//           这是从 KV 换 D1 后老账户凭证还在本地、但 D1 里没这账户的补救。
+async function saveWithRecovery(data, rev) {
+  const cred = getCred()
+  if (!cred) return { ok: false, error: 'no_cred' }
+  let res = await post('/save', { id: cred.id, password: cred.password, data, rev })
+  if (!res.ok && res.error === 'id_not_found') {
+    // 账户在云端不存在 → 用本地凭证注册(占坑),成功后重试上传
+    const reg = await post('/register', { id: cred.id, password: cred.password })
+    if (reg.ok) {
+      res = await post('/save', { id: cred.id, password: cred.password, data, rev })
+    }
+  }
+  // 云端返回 stale 表示我这个 rev 比云端旧(多设备并发),把本地 rev 对齐云端,下次 check 会拉回。
+  if (res && res.ok && res.stale && res.rev) setLocalRev(res.rev)
+  return res
+}
+
+// ponytail: 真正的网络上传。取当前 pendingData,带上本地 rev。
 async function doUpload() {
   if (!pendingData) return
   const cred = getCred()
@@ -134,9 +153,7 @@ async function doUpload() {
   pendingData = null
   lastUploadAt = Date.now()
   const rev = getLocalRev()
-  const res = await post('/save', { id: cred.id, password: cred.password, data, rev })
-  // 云端返回 stale 表示我这个 rev 比云端旧(多设备并发),把本地 rev 对齐云端,下次 check 会拉回。
-  if (res && res.ok && res.stale && res.rev) setLocalRev(res.rev)
+  await saveWithRecovery(data, rev)
 }
 
 // 立即上传指定存档,不走节流(用于登录后首次同步、导出存档等需要即时落云的场景)。
@@ -156,8 +173,7 @@ export async function cloudSaveNow(data) {
   }
   lastUploadAt = Date.now()
   const rev = getLocalRev()
-  const res = await post('/save', { id: cred.id, password: cred.password, data, rev })
-  if (res && res.ok && res.stale && res.rev) setLocalRev(res.rev)
+  const res = await saveWithRecovery(data, rev)
   return res && res.ok ? true : null
 }
 
