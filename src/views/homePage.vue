@@ -967,7 +967,7 @@
         >
           <el-button type="warning" class="dialog-footer-button">导入存档</el-button>
         </el-upload>
-        <el-button type="success" class="dialog-footer-button" @click="showCloudAccount">云存档登录 / 账户</el-button>
+        <el-button type="success" class="dialog-footer-button" @click="showCloudAccount">{{ cloudId ? `云账户:${cloudId}` : '云存档登录 / 账户' }}</el-button>
         <el-button type="danger" class="dialog-footer-button" @click="deleteData">删除存档</el-button>
         <el-divider>脚本相关</el-divider>
         <el-upload
@@ -1138,6 +1138,8 @@
   const store = useMainStore()
   const router = useRouter()
   const ver = ref('1.0.0')
+  // ponytail: 云账户名响应式态。初始化读本地凭证,登录/登出时更新,按钮文案随之变化。
+  const cloudId = ref(getCred()?.id || '')
   // 错误信息
   const err = ref('')
   const show = ref(false)
@@ -1626,6 +1628,7 @@
       })
         .then(() => {
           clearCred()
+          cloudId.value = '' // ponytail: 登出后按钮文案回落"云存档登录"
           gameNotifys({ title: '提示', message: '已登出云账户(本地存档保留)' })
         })
         .catch(() => {})
@@ -1680,6 +1683,7 @@
       return
     }
     // 登录成功:云端有档且本地无档 → 拉回;否则上传本地覆盖云端
+    cloudId.value = getCred()?.id || id // ponytail: 更新按钮文案为当前账户名
     const localSave = localStorage.getItem('vuex')
     if (res.data && !localSave) {
       localStorage.setItem('vuex', res.data)
