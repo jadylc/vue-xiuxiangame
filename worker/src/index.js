@@ -219,8 +219,9 @@ async function handleCheck(request, env) {
 // ---------- 账户读取 ----------
 
 async function getAuth(env, id) {
-  // ponytail: 返回 { salt, hash } 供密码校验;不存在返回 null。
-  return await env.DB.prepare('SELECT salt, hash FROM accounts WHERE id = ?').bind(id).first()
+  // ponytail: 返回 { salt, hash, is_admin } 供密码校验 + 管理员判断;不存在返回 null。
+  //           is_admin 必须一起查出来,否则 login 里 auth.is_admin 为 undefined,永远判非管理员。
+  return await env.DB.prepare('SELECT salt, hash, is_admin FROM accounts WHERE id = ?').bind(id).first()
 }
 
 // ---------- 密码派生 / 校验 ----------
