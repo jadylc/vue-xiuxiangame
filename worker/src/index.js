@@ -65,6 +65,10 @@ export default {
           if (request.method !== 'POST') return json({ ok: false, error: 'method_not_allowed' }, 405)
           return await handleLogin(request, env)
 
+        case '/check':
+          if (request.method !== 'POST') return json({ ok: false, error: 'method_not_allowed' }, 405)
+          return await handleCheck(request, env)
+
         case '/save':
           if (request.method !== 'POST') return json({ ok: false, error: 'method_not_allowed' }, 405)
           return await handleSave(request, env)
@@ -127,8 +131,10 @@ async function handleLogin(request, env) {
   }
 
   // ponytail: 登录成功返回该账户的存档（可能为 null，表示注册后还没存过档）。
+  //           同时返回 updatedAt，供前端判断云端版本新旧、做多设备同步。
   const data = await env.SAVES.get(`save:${id}`)
-  return json({ ok: true, data: data ?? null })
+  const updatedAt = await getSaveUpdatedAt(env, id)
+  return json({ ok: true, data: data ?? null, updatedAt })
 }
 
 // ---------- /save ----------
@@ -156,8 +162,43 @@ async function handleSave(request, env) {
     return json({ ok: false, error: 'wrong_password' }, 401)
   }
 
+  // ponytail: 存档 + 时间戳一起写。updatedAt 单独存 savemeta:<id>，供多设备同步判断版本。
+  const updatedAt = Date.now()
   await env.SAVES.put(`save:${id}`, data)
-  return json({ ok: true })
+  await env.SAVES.put(`savemeta:${id}`, JSON.stringify({ updatedAt }))
+  return json({ ok: true, updatedAt })
+}
+
+// ---------- /check ----------
+// ponytail: 轻量版本检查——只返回云端存档时间戳，不传整个存档，省流量。
+//           前端定时/切前台时调用，判断云端是否有比本地更新的进度。
+async function handleCheck(request, env) {
+  const body = await readJson(request)
+  if (!body) return json({ ok: false, error: 'bad_json' }, 400)
+
+  const id = normalizeId(body.id)
+  const password = typeof body.password === 'string' ? body.password : ''
+  if (!id) return json({ ok: false, error: 'missing_id' }, 400)
+
+  const auth = await getAuth(env, id)
+  if (!auth) return json({ ok: false, error: 'id_not_found' }, 404)
+  if (!(await verifyPassword(password, auth))) {
+    return json({ ok: false, error: 'wrong_password' }, 401)
+  }
+
+  const updatedAt = await getSaveUpdatedAt(env, id)
+  return json({ ok: true, updatedAt })
+}
+
+// ponytail: 读存档时间戳。无记录返回 0（老账户在本次改动前存的档没有 meta）。
+async function getSaveUpdatedAt(env, id) {
+  const raw = await env.SAVES.get(`savemeta:${id}`)
+  if (raw === null) return 0
+  try {
+    return JSON.parse(raw).updatedAt || 0
+  } catch {
+    return 0
+  }
 }
 
 // ---------- 密码派生 / 校验 ----------

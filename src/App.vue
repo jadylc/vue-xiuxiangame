@@ -41,6 +41,7 @@
   import { useRoute } from 'vue-router'
   import { ref, watch, computed, onMounted } from 'vue'
   import { useMainStore } from './plugins/store'
+  import { ElMessage } from 'element-plus'
 
   const player = ref({})
   const route = useRoute()
@@ -54,6 +55,11 @@
   )
 
   onMounted(() => {
+    // ponytail: 前台同步拉到其他设备的新存档并刷新后,给一次非阻塞提示(用户选"自动加载并提示")
+    if (sessionStorage.getItem('cloudSynced')) {
+      sessionStorage.removeItem('cloudSynced')
+      ElMessage({ message: '已自动同步其他设备的最新存档', type: 'success' })
+    }
     // 初始化玩家数据
     player.value = useMainStore().player
     setInterval(() => {

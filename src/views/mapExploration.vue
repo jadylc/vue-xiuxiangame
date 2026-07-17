@@ -22,7 +22,7 @@
         空地
       </div>
     </div>
-    <div class="map">
+    <div class="map" ref="mapContainer">
       <div class="grid-container">
         <div
           v-for="(cell, index) in grid"
@@ -239,6 +239,7 @@
   // 障碍物的数量
   const obstacleCount = ref(0)
   const cellRefs = ref([])
+  const mapContainer = ref(null)
   const movingContainer = ref(null)
   const outerContainer = ref(null)
   const innerContainer = ref(null)
@@ -759,11 +760,20 @@
   }
 
   // 滚动条自动滚动到玩家所在行
+  // ponytail: 只在地图容器内部滚动,不用 scrollIntoView——后者会连带滚动整个页面,
+  //           手机上把下方控制按钮顶出屏幕,导致每走一步都要重新下滑。
   const updateScroll = playerIndex => {
     const playerCell = cellRefs.value[playerIndex]
-    if (playerCell) {
+    const container = mapContainer.value
+    if (playerCell && container) {
       store.mapScroll = playerIndex
-      playerCell.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' })
+      // ponytail: 用 getBoundingClientRect 算格子相对容器的位移,不依赖 offsetParent 定位上下文。
+      //           把该位移叠加到容器当前 scroll 上,使玩家格子居中于容器可视区。
+      const cellRect = playerCell.getBoundingClientRect()
+      const boxRect = container.getBoundingClientRect()
+      const left = container.scrollLeft + (cellRect.left - boxRect.left) - container.clientWidth / 2 + cellRect.width / 2
+      const top = container.scrollTop + (cellRect.top - boxRect.top) - container.clientHeight / 2 + cellRect.height / 2
+      container.scrollTo({ left, top, behavior: 'smooth' })
     }
   }
 

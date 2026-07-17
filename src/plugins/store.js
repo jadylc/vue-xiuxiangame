@@ -112,27 +112,37 @@ export const useMainStore = defineStore('main', {
     mapScroll: 0,
     fishingMap: []
   }),
-  persist: {
-    key: 'vuex',
-    paths: ['boss', 'player'],
-    storage: localStorage,
-    serializer: {
-      serialize: state => {
-        const payload = JSON.stringify({
-          boss: crypto.encryption(state.boss),
-          player: crypto.encryption(state.player)
-        })
-        // ponytail: 异步上云,fire-and-forget;不 await 不看结果,断网即跳过,不改变 serialize 返回值
-        cloudSave(payload)
-        return payload
-      },
-      deserialize: value => {
-        const state = JSON.parse(value)
-        return {
-          boss: crypto.decryption(state.boss),
-          player: crypto.decryption(state.player)
+  persist: [
+    {
+      key: 'vuex',
+      paths: ['boss', 'player'],
+      storage: localStorage,
+      serializer: {
+        serialize: state => {
+          const payload = JSON.stringify({
+            boss: crypto.encryption(state.boss),
+            player: crypto.encryption(state.player)
+          })
+          // ponytail: 异步上云,fire-and-forget;不 await 不看结果,断网即跳过,不改变 serialize 返回值
+          cloudSave(payload)
+          return payload
+        },
+        deserialize: value => {
+          const state = JSON.parse(value)
+          return {
+            boss: crypto.decryption(state.boss),
+            player: crypto.decryption(state.player)
+          }
         }
       }
+    },
+    // ponytail: 秘境地图单独本地持久化——刷新后位置不丢。刻意不进云存档:
+    //   1. 地图是设备本地临时状态,跨设备同步没意义(回家即重置)
+    //   2. 2500 格地图约 80KB,塞进每次云存档会大幅撑大体积/流量
+    {
+      key: 'mapState',
+      paths: ['mapData', 'mapScroll'],
+      storage: localStorage
     }
-  }
+  ]
 })
