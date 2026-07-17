@@ -2153,6 +2153,77 @@
       .catch(() => {})
   }
 
+  // ponytail: 一键道侣升级——循环升级直到情缘点不够或满级,免去反复点确认。
+  //           每级消耗 level*10 情缘,属性按当前值 10% 增长,和 wifeUpgrade 逻辑一致。
+  const wifeUpgradeAll = item => {
+    if (!item || !item.name) return
+    if (item.level >= maxLv) {
+      gameNotifys({ title: '道侣升级提示', message: '道侣等级已满', position: 'top-left' })
+      return
+    }
+    let count = 0
+    // 每次按当前等级算消耗,够就升,直到情缘不足或满级
+    while (player.value.wife.level < maxLv && player.value.props.qingyuan >= player.value.wife.level * 10) {
+      const consume = player.value.wife.level * 10
+      const attack = Math.floor(player.value.wife.attack * 0.1)
+      const health = Math.floor(player.value.wife.health * 0.1)
+      const defense = Math.floor(player.value.wife.defense * 0.1)
+      player.value.wife.level++
+      player.value.wife.attack += attack
+      player.value.wife.health += health
+      player.value.wife.defense += defense
+      playerAttribute(0, attack, health, 0, defense)
+      player.value.props.qingyuan -= consume
+      count++
+    }
+    if (count) {
+      gameNotifys({ title: '道侣升级提示', message: `一键升级成功,共升 ${count} 级`, position: 'top-left' })
+    } else {
+      gameNotifys({ title: '道侣升级提示', message: '情缘点不足,无法升级', position: 'top-left' })
+    }
+  }
+
+  // ponytail: 一键灵宠培养——循环培养直到培养丹不够或满级。只培养不转生(转生是重大操作,
+  //           且会重置等级,应手动勾选确认),悟性提升也交给手动(消耗悟性丹,策略性操作)。
+  const petUpgradeAll = item => {
+    if (!item || !item.name) return
+    if (item.level >= maxLv) {
+      gameNotifys({ title: '灵宠培养提示', message: '灵宠境界已满,请手动转生', position: 'top-left' })
+      return
+    }
+    // 一键只做基础培养:不转生、不提升悟性,按 initial 的 5% 涨属性(和 petUpgrade 未勾选分支一致)
+    let count = 0
+    while (player.value.pet.level < maxLv) {
+      // ponytail: 一键培养期间转生/悟性都视为未勾选,消耗按基础公式 lv*200(+转生附加)算
+      const lv = player.value.pet.level
+      const reincarnation = player.value.pet.reincarnation ? lv * 200 : 1
+      const consume = lv * 200 + reincarnation
+      if (consume > player.value.props.cultivateDan) break
+      const attack = Math.floor(item.initial.attack * 0.05)
+      const health = Math.floor(item.initial.health * 0.05)
+      const defense = Math.floor(item.initial.defense * 0.05)
+      player.value.pet.level++
+      player.value.pet.attack += attack
+      player.value.pet.health += health
+      player.value.pet.defense += defense
+      playerAttribute(0, attack, health, 0, defense)
+      player.value.pet.score = equip.calculateEquipmentScore(
+        player.value.pet.dodge,
+        player.value.pet.attack,
+        player.value.pet.health,
+        player.value.pet.critical,
+        player.value.pet.defense
+      )
+      player.value.props.cultivateDan -= consume
+      count++
+    }
+    if (count) {
+      gameNotifys({ title: '灵宠培养提示', message: `一键培养成功,共升 ${count} 级`, position: 'top-left' })
+    } else {
+      gameNotifys({ title: '灵宠培养提示', message: '培养丹不足,无法培养', position: 'top-left' })
+    }
+  }
+
   // 计算灵宠升级所需消耗
   const petConsumption = lv => {
     // 是否勾选转生选项
