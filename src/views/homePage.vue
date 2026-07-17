@@ -1243,7 +1243,28 @@
     return Object.keys(obj).map(key => ({ name: key, num: obj[key] }))
   })
 
+  // ponytail: 一次性修复历史重复 id。老存档装备用 id:Date.now() 生成,同毫秒爆多件会撞 id,
+  //           导致穿戴移除/分解时按 id 的 filter/find 误伤同 id 的其它装备(属性扣成负数、背包被清空)。
+  //           进游戏时给背包每件装备重新分配唯一 id,确保 id 全局不重复,根治按 id 的误操作。
+  const dedupeInventoryIds = () => {
+    const inv = player.value.inventory
+    if (!Array.isArray(inv) || !inv.length) return
+    const seen = new Set()
+    // 收集当前已穿戴装备的 id,避免重分配后和身上的撞
+    for (const type of ['sutra', 'armor', 'weapon', 'accessory']) {
+      const eq = player.value.equipment?.[type]
+      if (eq && eq.id != null) seen.add(eq.id)
+    }
+    for (const item of inv) {
+      if (item.id == null || seen.has(item.id)) {
+        item.id = uniqueId()
+      }
+      seen.add(item.id)
+    }
+  }
+
   onMounted(() => {
+    dedupeInventoryIds()
     achievementAll.value = achievement.all()
     illustrationsItems.value = equipAll.drawPrize(maxLv)
     startGame()
@@ -2443,12 +2464,10 @@
       inventoryItem.critical,
       inventoryItem.defense
     )
-    console.log(player.value.inventory)
     // 从背包中移除新装备
     player.value.inventory = player.value.inventory.filter(item => item.id && item.id !== id)
     // 重置类型
     type = ''
-    console.log(player.value.inventory)
     // 关闭道具信息弹窗
     inventoryShow.value = false
   }
