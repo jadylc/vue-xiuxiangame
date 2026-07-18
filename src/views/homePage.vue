@@ -418,6 +418,9 @@
           <el-button type="primary" @click="wifeUpgrade(player.wife)" :disabled="player.wife.level >= maxLv">
             {{ player.wife.level >= maxLv ? '道侣等级已满' : '道侣升级' }}
           </el-button>
+          <el-button type="success" @click="wifeUpgradeAll(player.wife)" :disabled="player.wife.level >= maxLv">
+            一键升级
+          </el-button>
         </div>
       </div>
     </el-drawer>
@@ -453,6 +456,9 @@
           <el-checkbox v-model="petReincarnation" label="灵宠转生" />
           <el-checkbox v-model="petRootBone" label="提升悟性" />
           <el-button type="primary" @click="petUpgrade(player.pet)">点击培养</el-button>
+          <el-button type="success" @click="petUpgradeAll(player.pet)" :disabled="player.pet.level >= maxLv">
+            一键培养
+          </el-button>
         </div>
       </div>
     </el-drawer>
