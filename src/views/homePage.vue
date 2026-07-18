@@ -951,6 +951,7 @@
           <el-button type="warning" class="dialog-footer-button">导入存档</el-button>
         </el-upload>
         <el-button type="success" class="dialog-footer-button" @click="showCloudAccount">{{ cloudId ? `云账户:${cloudId}` : '云存档登录 / 账户' }}</el-button>
+        <el-button v-if="cloudId" type="primary" class="dialog-footer-button" @click="manualSync">立即同步存档</el-button>
         <el-button type="danger" class="dialog-footer-button" @click="deleteData">删除存档</el-button>
         <el-divider>脚本相关</el-divider>
         <el-upload
@@ -1663,6 +1664,25 @@
     saveAs(blob, name)
     // ponytail: 已登录则顺手同步一次云端,保证导出时刻云端也是最新
     if (isLoggedIn()) await cloudSaveNow(localStorage.getItem('vuex'))
+  }
+
+  // ponytail: 立即同步存档到云端——手动触发,不走 30 秒节流。给玩家一个明确的"现在就上传"入口。
+  const manualSync = async () => {
+    if (!isLoggedIn()) {
+      gameNotifys({ title: '云同步', message: '请先登录云账户', position: 'top-left' })
+      return
+    }
+    const data = localStorage.getItem('vuex')
+    if (!data) {
+      gameNotifys({ title: '云同步', message: '本地暂无存档', position: 'top-left' })
+      return
+    }
+    const ok = await cloudSaveNow(data)
+    gameNotifys({
+      title: '云同步',
+      message: ok ? '存档已同步到云端' : '同步失败, 请检查网络或重新登录',
+      position: 'top-left'
+    })
   }
 
   // ponytail: 云账户弹窗 —— 已登录显示账户 + 登出;未登录提供注册/登录。
