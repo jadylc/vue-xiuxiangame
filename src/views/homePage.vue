@@ -1154,7 +1154,7 @@
   import equipTooltip from '@/components/equipTooltip.vue'
   import { ElMessageBox } from 'element-plus'
   import { useMainStore } from '@/plugins/store'
-  import { cloudSaveNow, login, register, getCred, clearCred, isLoggedIn, setLocalRev, isAdmin } from '@/plugins/cloudSave'
+  import { cloudSaveNow, forcePull, login, register, getCred, clearCred, isLoggedIn, setLocalRev, isAdmin } from '@/plugins/cloudSave'
   import {
     maxLv,
     dropdownType,

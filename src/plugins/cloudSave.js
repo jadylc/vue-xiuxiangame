@@ -68,8 +68,8 @@ export function isLoggedIn() {
   return getCred() !== null
 }
 
-// ponytail: 本地版本号读写。缺省 0(从没同步过)。
-function getLocalRev() {
+// ponytail: 本地版本号读写。缺省 0(从没同步过)。rev 就是存档那一刻的 Date.now(),可当时间用。
+export function getLocalRev() {
   return parseInt(localStorage.getItem(LOCAL_REV_KEY) || '0', 10) || 0
 }
 export function setLocalRev(rev) {
@@ -252,6 +252,30 @@ export async function checkAndPull() {
     return true
   }
   return false
+}
+
+// 强制从云端拉取存档覆盖本地,不看 rev(用于"从云端恢复"手动按钮)。
+// ponytail: checkAndPull 有 rev 判断(本地不旧就不拉),换设备想强制拿云端最新时用这个。
+//           返回 { ok, empty } —— empty 表示云端没有存档(账户存在但没存过档)。
+export async function forcePull() {
+  const cred = getCred()
+  if (!cred) return { ok: false, error: 'no_cred' }
+  const res = await post('/login', { id: cred.id, password: cred.password })
+  if (!res.ok) return { ok: false, error: res.error }
+  if (!res.data) return { ok: false, empty: true }
+  localStorage.setItem('vuex', res.data)
+  setLocalRev(res.rev || Date.now())
+  return { ok: true }
+}
+
+// 只查云端存档 rev(不拉整个存档),用于同步前比较两边时间。
+// ponytail: 返回 { ok, rev }。rev 即云端存档的 Date.now();0 表示云端没存过档。
+export async function getCloudRev() {
+  const cred = getCred()
+  if (!cred) return { ok: false, error: 'no_cred' }
+  const chk = await post('/check', { id: cred.id, password: cred.password })
+  if (!chk.ok) return { ok: false, error: chk.error }
+  return { ok: true, rev: chk.rev || 0 }
 }
 
 // 启动多设备自动同步:页面切后台时补传本地进度,回到前台时检查其他设备的新进度。
